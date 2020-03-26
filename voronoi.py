@@ -24,9 +24,13 @@
 # Voronoi diagrams on x/y grids.
 #
 # These algorithms assume a "grid" with the following interfaces:
-#     [ NOTE: All of these requirements are met by a simple dict storing
-#             point objects indexed by an (x, y) tuple. Any other grid
-#             representation meeting these requirements will also work ]
+#     [ NOTE: These requirements are completely met by a simple dict
+#             storing point objects indexed by an (x, y) tuple. Any other grid
+#             representation meeting these requirements will also work.
+#
+#             The methods _neighbors and _distmetric completely encapsulate
+#             these requirements. A subclass could override them if necessary
+#             to interface with a grid object not meeting these semantics. ]
 #
 # TERMINOLOGY: XY TUPLES
 #  A grid square has an x and y coordinate, or an "xy tuple":
@@ -34,24 +38,20 @@
 #
 # POINT LOOKUP:
 #
-#  Let g be a grid.
-#
-#      p = g[xy]   obtains a point, p, at grid coordinate xy
-#
-# The code does not care anything about p except:
-#   If xy is not within limits, p MUST be None OR an exception must be raised.
-#   If xy is within grid limits, p MUST NOT be None.
-#
-# Class attribute OFFGRIDEXCEPTIONS defines the acceptable exceptions.
-#
-# In effect, g[xy] is used only to test whether xy is in the grid or not.
+#  The code never really looks at points, it just needs to know whether
+#  a given xy is in grid or not. The grid object must support __contains__,
+#  which is accessed via the "in" operation:
+#     if xy in grid:
+#        ...
 #
 # COORDINATE MATH:
 #
 # Given x, y = xy, the following are assumed:
 #
 #    Neighbors:
-#       Can be found as g[(x-1, y-1)], g[(x-1, y)], ... etc
+#       Neighbor coordinate tuples for a given (x, y) can be computed
+#       as (x-1, y-1), (x-1, y), ... etc. The "in" (__contains__ method)
+#       will of course be used to test if each neighbor is within the grid
 #
 #       ** Override the _neighbors() method if this is not the case.
 #
@@ -65,10 +65,6 @@
 
 class Voronoi:
     """Voronoi diagrams. See https://en.wikipedia.org/wiki/Voronoi_diagram"""
-
-    # Exceptions that will be taken as meaning "off grid" if raised by g[xy]
-    # Override this as necessary.
-    OFFGRIDEXCEPTIONS = (KeyError, IndexError)
 
     # Default distance metric is euclidean distance, squared.
     # Squared because the algorithm doesn't care about the values
@@ -98,12 +94,9 @@ class Voronoi:
         """Return xy tuples for the neighbors of xy."""
         x, y = xy
         for dx, dy in self.NEIGHBOR_RULE:
-            try:
-                nb = g[(x + dx, y + dy)]
-            except self.OFFGRIDEXCEPTIONS:
-                nb = None
-            if nb is not None:
-                yield (x + dx, y + dy)
+            t = (x + dx, y + dy)
+            if t in g:
+                yield t
 
     def __init__(self, g, sites):
         """Create voronoi cells from the given sites.
@@ -183,32 +176,26 @@ class Voronoi:
         # Every site belongs to itself as a start:
         xy2s = {xy: xy for xy in sites}
 
-        # Ambiguous squares are recorded here. If xy could have been
-        # assigned to more than one equidistant site, then
-        #         ambig[xy] = set of xy1, xy2, ...
-        ambig = {}
-
         # The per-site active perimeters, stored in an inverted structure:
         #   perims_by_N:         dict indexed by distmetric, containing...
         #   perims_by_N[dm]      dict, indexed by xy, containing...
-        #   perims_by_N[dm][xy]  list of sites that are at distance dm from xy
+        #   perims_by_N[dm][xy]  (first) site at distance dm from xy
 
         perims_by_N = {}
 
         # helper to add neighbors of xy as being in perim of site s
         # NOTE: this takes liberal advantage of access to enclosing scope
+
         def _perims_add_nb(xy, s):
             for nb in self._neighbors(g, xy):
                 if nb not in xy2s:
                     dm = self._distmetric(nb, s)
                     if dm not in perims_by_N:
-                        perims_by_N[dm] = {}
-                    xysN = perims_by_N[dm]
-                    if nb not in xysN:
-                        xysN[nb] = []
-                    xysites = xysN[nb]
-                    if s not in xysites:
-                        xysites.append(s)
+                        perims_by_N[dm] = {nb: s}
+                    else:
+                        xysN = perims_by_N[dm]
+                        if nb not in xysN:
+                            xysN[nb] = s
 
         # start the initial site perimeters
         for s in sites:
@@ -216,24 +203,17 @@ class Voronoi:
 
         while perims_by_N:
             # take the smallest known distance metric
-            # ?? there might be a more clever way, is it always
-            #    the first in the (ordered-by-insertions) dict?
             N = min(perims_by_N.keys())
-            for xy, xysites in list(perims_by_N[N].items()):
+            for xy, xysites in perims_by_N[N].items():
                 if xy not in xy2s:     # i.e., only do if not already claimed
 
                     # always simply take the first (whether only, or "of N")
-                    s = xysites[0]
-                    xy2s[xy] = s
-
-                    # but keep track of the ambiguities, just because
-                    if len(xysites) > 1:
-                        ambig[xy] = xysites
+                    xy2s[xy] = xysites
 
                     # NOTE: by definition the neighbors cannot be at this
                     # same N; therefore, although this modifies perims_by_N
                     # it does not modify perims_by_N[N] used in this loop
-                    _perims_add_nb(xy, s)
+                    _perims_add_nb(xy, xysites)
 
             del perims_by_N[N]
 
@@ -246,7 +226,6 @@ class Voronoi:
         self.__grid = g
         self.__xy2s = xy2s
         self.__site2xys = site2xys
-        self.ambiguous = ambig
 
     @property
     def sites(self):
@@ -332,17 +311,31 @@ if __name__ == "__main__":
     import unittest
     import random
 
+    # This skeletal grid class suffices for running tests and
+    # is marginally faster than initializing a dict
+    class FauxGrid:
+        def __init__(self, xsize, ysize):
+            self.xsize = xsize
+            self.ysize = ysize
+
+        def __contains__(self, xy):
+            x, y = xy
+            return x >= 0 and y >= 0 and x < self.xsize and y < self.ysize
+
+        def all(self):
+            for x in range(self.xsize):
+                for y in range(self.ysize):
+                    yield (x, y)
+
+        def d2distance(self, p1, p2):
+            dx = p1[0] - p2[0]
+            dy = p1[1] - p2[1]
+            return (dx * dx) + (dy * dy)
+
     class TestMethods(unittest.TestCase):
 
         def makemap(self, xsize=100, ysize=100, defval='.'):
-            return {(x, y): defval for x in range(xsize) for y in range(ysize)}
-
-        def fillfromstrings(self, d, *strings):
-            y = 0
-            for s in strings:
-                for x in range(len(s)):
-                    d[(x, y)] = s[x]
-                y += 1
+            return FauxGrid(xsize, ysize)
 
         def test_vor1(self):
             size = 8             # MUST BE EVEN
@@ -425,49 +418,90 @@ if __name__ == "__main__":
             self.assertEqual(v.vcellsstr(), correct)
 
         def test_vor5(self):
-            size = 50
-
-            # these test vectors are collected from some randomly generated
-            # cases but also some hand-culled "problematic" test cases.
+            # test cases from various sources, some known to be
+            # very specific aliasing cases (so noted), but by and
+            # large they were gathered from randomly-generated test cases
+            # The point here is that they are REPEATABLE (i.e., not random).
+            #
+            # each test vector is a (sloppy) tuple:
+            #      (gridsize, slack-in-ppm, tuples...)
+            #
+            #
             test_vectors = (
-                ((0, 0), (size-1, size-1)),
-                ((4, 3), (12, 0), (0, 6)),
-                ((25, 11), (33, 8), (21, 14)),
-                ((19, 0), (13, 15), (18, 7)),
-                ((18, 7), (19, 0), (13, 15)),
-                ((11, 37), (6, 19), (14, 38), (25, 11), (11, 21),
-                 (17, 18), (11, 3), (33, 8), (21, 14)),
-                ((8, 47), (6, 8), (21, 3), (45, 46), (5, 24),
-                 (39, 4), (35, 48), (10, 19), (29, 2), (9, 43)),
-                ((38, 47), (12, 4), (23, 36), (30, 27), (5, 16),
-                 (29, 46), (28, 7), (34, 18), (28, 20), (16, 28)),
-                ((5, 40), (30, 1), (26, 42), (29, 8), (36, 3),
-                 (49, 48), (32, 29), (16, 13), (34, 10), (14, 6)),
-                ((7, 47), (24, 29), (45, 41), (38, 4), (2, 10),
-                 (48, 34), (17, 15), (42, 39), (41, 23), (6, 1)),
-                ((19, 13), (43, 19), (41, 35), (7, 18), (26, 35),
-                 (8, 43), (37, 35), (38, 29), (39, 7), (31, 47)),
-                ((20, 35), (7, 17), (26, 31), (40, 25), (21, 48),
-                 (11, 26), (21, 33), (25, 43), (5, 5), (4, 12)),
-                ((4, 7), (38, 11), (18, 39), (7, 10), (25, 4),
-                 (9, 35), (35, 17), (21, 38), (32, 9), (1, 30)),
-                ((2, 38), (23, 23), (27, 11), (11, 0), (7, 28),
-                 (29, 3), (46, 12), (45, 9), (49, 5), (20, 13)),
-                ((33, 17), (2, 12), (33, 32), (14, 15), (12, 5),
-                 (18, 47), (16, 25), (45, 3), (36, 42), (16, 20)),
-                ((23, 4), (12, 32), (15, 17), (3, 15), (12, 30),
-                 (21, 7), (25, 27), (2, 28), (44, 32), (7, 16)))
-            for onetest in test_vectors:
-                g = self.makemap(size, size)
-                self.brutevv(g, Voronoi(g, onetest))
 
-        def brutevv(self, g, v, slack=1.01):
+                # test cases with specific known PPM levels
+                # a ppm level of "k" means the required slack to accept
+                # the error is 1 + (k/1000000)
+
+                # 1839 (requires 1.001839 slack)
+                (50, 1839, (4, 3), (12, 0), (0, 6)),
+                # original 1839 (random generated) case, simplified above
+                (50, 1839, (11, 37), (6, 19), (14, 38), (25, 11), (11, 21),
+                 (17, 18), (11, 3), (33, 8), (21, 14)),
+
+                # 2778
+                (100, 2778, (12, 10), (17, 2), (11, 16)),
+
+                # 3461
+                (130, 3461, (94, 74), (89, 72), (4, 45), (122, 86), (108, 73),
+                 (112, 78), (80, 67)),
+
+                # 5918
+                (100, 5918, (17, 1), (4, 7), (3, 15), (15, 4), (18, 7),
+                 (15, 1), (11, 0), (12, 7), (7, 6), (15, 16), (4, 14),
+                 (19, 9)),
+
+                # other hand-selected test cases and (once) randomly generated
+                (50, 0, (0, 0), (49, 49)),
+                (50, 0, (19, 0), (13, 15), (18, 7)),
+                (50, 0, (18, 7), (19, 0), (13, 15)),
+                (50, 0, (8, 47), (6, 8), (21, 3), (45, 46), (5, 24),
+                 (39, 4), (35, 48), (10, 19), (29, 2), (9, 43)),
+                (50, 0, (38, 47), (12, 4), (23, 36), (30, 27), (5, 16),
+                 (29, 46), (28, 7), (34, 18), (28, 20), (16, 28)),
+                (50, 0, (5, 40), (30, 1), (26, 42), (29, 8), (36, 3),
+                 (49, 48), (32, 29), (16, 13), (34, 10), (14, 6)),
+                (50, 0, (7, 47), (24, 29), (45, 41), (38, 4), (2, 10),
+                 (48, 34), (17, 15), (42, 39), (41, 23), (6, 1)),
+                (50, 0, (19, 13), (43, 19), (41, 35), (7, 18), (26, 35),
+                 (8, 43), (37, 35), (38, 29), (39, 7), (31, 47)),
+                (50, 0, (20, 35), (7, 17), (26, 31), (40, 25), (21, 48),
+                 (11, 26), (21, 33), (25, 43), (5, 5), (4, 12)),
+                (50, 0, (4, 7), (38, 11), (18, 39), (7, 10), (25, 4),
+                 (9, 35), (35, 17), (21, 38), (32, 9), (1, 30)),
+                (50, 0, (2, 38), (23, 23), (27, 11), (11, 0), (7, 28),
+                 (29, 3), (46, 12), (45, 9), (49, 5), (20, 13)),
+                (50, 0, (33, 17), (2, 12), (33, 32), (14, 15), (12, 5),
+                 (18, 47), (16, 25), (45, 3), (36, 42), (16, 20)),
+                (50, 0, (23, 4), (12, 32), (15, 17), (3, 15), (12, 30),
+                 (21, 7), (25, 27), (2, 28), (44, 32), (7, 16)))
+            for size, ppm, *sites in test_vectors:
+                g = self.makemap(size, size)
+                slack = 1.0 + (ppm / 1000000.0)
+                errstr = self.brutevv(g, Voronoi(g, sites), slack)
+                self.assertTrue(errstr is None, errstr)
+                # if the slack is non-zero, verify that it's correct.
+                # This is as much about testing the test as testing voronoi...
+                if ppm != 0:
+                    slackm1 = 1.0 + ((ppm - 1) / 1000000.0)
+                    errstr = self.brutevv(g, Voronoi(g, sites), slackm1)
+                    self.assertTrue(errstr is not None, f"slackm1 {ppm}")
+
+        def brutevv(self, g, v, slack=1.008):
             # brute-force verify every point is indeed closest to the
             # voronoi seed for the one it was put into.
-            # HOWEVER, allow a small amount of slack (1%, arbitrary).
-            # See Voronoi code for extensive discussion this issue.
-
-            for xy in g.keys():
+            # HOWEVER, allow some error ("slack", 0.8%, somewhat arbitrary).
+            # After running random test cases for multiple days, the
+            # highest error amount seen was 1.006238; obviously this is
+            # no guarantee that higher errors won't be seen.
+            #
+            # See Voronoi code for discussion; it is a fundamental (haha!)
+            # consequence of aliasing "high frequencies" -- i.e., "pointy"
+            # Voronoi cells -- against a finite-resolution grid.
+            #
+            # Returns None for success or a descriptive error string for fail
+            #
+            for xy in g.all():
                 xysite = v.xy_to_site(xy)
                 d0 = v._distmetric(xysite, xy)
 
@@ -475,22 +509,26 @@ if __name__ == "__main__":
                     if othersite != xysite:
                         d1 = v._distmetric(othersite, xy)
                         d1 *= slack
-                        s = ""
-                        s = f"xy={xy}"
-                        s += f" d0={d0} d1={d1}"
-                        s += f" xysite={xysite}"
-                        s += f"othersite={othersite}"
-                        s += f" {v.sites}"
-                        self.assertTrue(d0 <= d1, s)
+                        if d0 > d1:
+                            s = ""
+                            s = f"xy={xy}"
+                            s += f" d0={d0} d1={d1}"
+                            s += f" xysite={xysite}"
+                            s += f"othersite={othersite}"
+                            s += f" {v.sites}"
+                            return s
+            return None
 
         def test_vor6(self):
             # same idea as test_vor5 but with randomness
+            # does not control "slack" (uses default, see brutevv)
             for nth in range(5):
                 size = random.randrange(30, 300)
                 nsites = max(size // random.randrange(3, 50), 1)
                 g = self.makemap(size, size)
-                sites = random.sample(set(g.keys()), nsites)
-                self.brutevv(g, Voronoi(g, sites))
+                sites = random.sample(set(g.all()), nsites)
+                errstr = self.brutevv(g, Voronoi(g, sites))
+                self.assertTrue(errstr is None, errstr)
 
         def test_lloyd1(self):
             # very simple-minded test, start with a 5x5 with a site in
