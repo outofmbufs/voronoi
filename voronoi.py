@@ -24,13 +24,13 @@
 # Voronoi diagrams on x/y grids.
 #
 # These algorithms assume a "grid" with the following interfaces:
-#     [ NOTE: These requirements are completely met by a simple dict
-#             storing point objects indexed by an (x, y) tuple. Any other grid
-#             representation meeting these requirements will also work.
+#    NOTE: These requirements are completely met by a simple dict
+#          storing point objects indexed by an (x, y) tuple. Any other grid
+#          representation meeting these requirements will also work.
 #
-#             The methods _neighbors and _distmetric completely encapsulate
-#             these requirements. A subclass could override them if necessary
-#             to interface with a grid object not meeting these semantics. ]
+#          The methods _neighbors and _distmetric completely encapsulate
+#          these requirements. A subclass can override them if necessary
+#          to interface with a grid object not meeting these semantics.
 #
 # TERMINOLOGY: XY TUPLES
 #  A grid square has an x and y coordinate, or an "xy tuple":
@@ -67,9 +67,7 @@ class Voronoi:
     """Voronoi diagrams. See https://en.wikipedia.org/wiki/Voronoi_diagram"""
 
     # Default distance metric is euclidean distance, squared.
-    # Squared because the algorithm doesn't care about the values
-    # themselves, only about greater/less relationships, so omitting
-    # the square root step doesn't matter, and is a bit faster.
+    # Avoiding sqrt is an optimization because only relative size matters.
     #
     # Override this method if a different distance metric is required.
     #
@@ -99,12 +97,17 @@ class Voronoi:
                 yield t
 
     def __init__(self, g, sites):
-        """Create voronoi cells from the given sites.
+        """Create voronoi cells within grid g from the given sites.
 
         v = Voronoi(g, sites)
                g: a "grid" that can be indexed by (x, y) tuple
-           sites: iterable of (x, y) tuples definined Voronoi sites (seeds).
+           sites: iterable of (x, y) tuples defining Voronoi sites (seeds).
         """
+
+        # Disallow degenerate "no sites" case (rather than test for it
+        # in xy_to_sites etc or cause a cryptic KeyError exception)
+        if len(sites) == 0:
+            raise ValueError("Voronoi cannot be created with no sites")
 
         # algorithm assumes no duplicated sites; enforce this w/useful msg
         if len(set(sites)) != len(sites):
@@ -169,7 +172,7 @@ class Voronoi:
         #   2: Every Voronoi cell is a contiguous blob.
         #
         # For an in-depth discussion of this, see: https://tinyurl.com/sw4tga7
-        #
+        # and related postings on www.neilwebber.com (search voronoi)
 
         # xy2s is (becomes) a mapping (i.e. a dict) from any xy to its
         # corresponding Voronoi cell (denoted by the xy of its site).
@@ -204,16 +207,15 @@ class Voronoi:
         while perims_by_N:
             # take the smallest known distance metric
             N = min(perims_by_N.keys())
-            for xy, xysites in perims_by_N[N].items():
+            for xy, s in perims_by_N[N].items():
                 if xy not in xy2s:     # i.e., only do if not already claimed
 
-                    # always simply take the first (whether only, or "of N")
-                    xy2s[xy] = xysites
+                    xy2s[xy] = s       # assign this one to its site
 
                     # NOTE: by definition the neighbors cannot be at this
                     # same N; therefore, although this modifies perims_by_N
                     # it does not modify perims_by_N[N] used in this loop
-                    _perims_add_nb(xy, xysites)
+                    _perims_add_nb(xy, s)
 
             del perims_by_N[N]
 
@@ -272,19 +274,19 @@ class Voronoi:
 
     # simple-minded string representation of a Voronoi
     # No attempt is made here to handle the "map coloring" problem
-    def vcellsstr(v):
+    def vcellsstr(self):
         str = ""
         sites_to_char = {}
         reps = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
         nth = 0
         xy_to_char = {}
         xmin = xmax = ymin = ymax = None
-        for s in v:
+        for s in self:
             sites_to_char[s] = reps[nth % len(reps)]
             nth += 1
             # this is hokey, but avoids assuming anything about xy ranges...
             # discover from them examining all the xys in all the cells
-            for xy in v.cellxys(s):
+            for xy in self.cellxys(s):
                 if xmin is None or xy[0] < xmin:
                     xmin = xy[0]
                 if xmax is None or xy[0] > xmax:
@@ -297,7 +299,7 @@ class Voronoi:
         for y in range(ymax, ymin-1, -1):
             line = ""
             for x in range(xmin, xmax+1):
-                site = v.xy_to_site((x, y))
+                site = self.xy_to_site((x, y))
                 ch = sites_to_char[site]
                 if (x, y) == site:
                     ch = ch.lower()
@@ -312,7 +314,7 @@ if __name__ == "__main__":
     import random
 
     # This skeletal grid class suffices for running tests and
-    # is marginally faster than initializing a dict
+    # is much faster than initializing a dict (for testing purposes)
     class FauxGrid:
         def __init__(self, xsize, ysize):
             self.xsize = xsize
@@ -334,12 +336,9 @@ if __name__ == "__main__":
 
     class TestMethods(unittest.TestCase):
 
-        def makemap(self, xsize=100, ysize=100, defval='.'):
-            return FauxGrid(xsize, ysize)
-
         def test_vor1(self):
             size = 8             # MUST BE EVEN
-            g = self.makemap(size, size)
+            g = FauxGrid(size, size)
             sitexys = ((0, 0),
                        (0, size-1),
                        (size-1, 0),
@@ -359,7 +358,7 @@ if __name__ == "__main__":
 
         def test_vor2(self):
             size = 8
-            g = self.makemap(size, size)
+            g = FauxGrid(size, size)
             sitexys = ((0, 0), (0, 1), (1, 0), (1, 1))
             v = Voronoi(g, sitexys)
 
@@ -395,7 +394,7 @@ if __name__ == "__main__":
 
         def test_vor3(self):
             size = 25
-            g = self.makemap(size, size)
+            g = FauxGrid(size, size)
             v = Voronoi(g, [(x, y) for x in range(size) for y in range(size)])
             self.assertEqual(len(v.sites), size*size)
             # every cell should have just one square
@@ -404,7 +403,7 @@ if __name__ == "__main__":
                 self.assertEqual(len(xys), 1)
 
         def test_vor4(self):
-            g = self.makemap(8, 5)
+            g = FauxGrid(8, 5)
             v = Voronoi(g, ((2, 2), (6, 1)))
 
             # this has just been hand-constructed as the correct answer
@@ -419,39 +418,75 @@ if __name__ == "__main__":
 
         def test_vor5(self):
             # test cases from various sources, some known to be
-            # very specific aliasing cases (so noted), but by and
-            # large they were gathered from randomly-generated test cases
-            # The point here is that they are REPEATABLE (i.e., not random).
-            #
-            # each test vector is a (sloppy) tuple:
+            # very specific aliasing cases (so noted).
+            # Each test vector is a (sloppy) tuple:
             #      (gridsize, slack-in-ppm, tuples...)
             #
-            #
             test_vectors = (
-
-                # test cases with specific known PPM levels
-                # a ppm level of "k" means the required slack to accept
+                # A ppm level of "k" means the required slack to accept
                 # the error is 1 + (k/1000000)
+                #
+                # Many of these came from a randomized test search and then
+                # were "reduced" to a minimal size for the specific example.
+
+                # PPM=595 (i.e., requires 1.000595 slack)
+                (42, 595, (0, 31), (13, 0), (1, 21)),
 
                 # 1839 (requires 1.001839 slack)
-                (50, 1839, (4, 3), (12, 0), (0, 6)),
-                # original 1839 (random generated) case, simplified above
+                # example analyzed in detail at:
+                #  http://neilwebber.com/notes/
+                #     2020/03/17/voronoi-diagram-problems-on-a-grid/
+                (24, 1839, (4, 3), (12, 0), (0, 6)),
+
+                # original 1839 (was randomly generated) case, simplified above
                 (50, 1839, (11, 37), (6, 19), (14, 38), (25, 11), (11, 21),
                  (17, 18), (11, 3), (33, 8), (21, 14)),
 
+                # 2228
+                (31, 2228, (1, 30), (24, 18), (13, 27)),
+
                 # 2778
-                (100, 2778, (12, 10), (17, 2), (11, 16)),
+                (20, 2778, (1, 8), (6, 0), (0, 14)),
 
                 # 3461
-                (130, 3461, (94, 74), (89, 72), (4, 45), (122, 86), (108, 73),
-                 (112, 78), (80, 67)),
+                (35, 3461, (0, 0), (28, 12), (18, 4)),
+
+                # 3765 original test case from randomized test search
+                (207, 3765, (180, 63), (83, 176), (171, 29), (70, 98),
+                 (189, 195), (60, 186), (2, 153), (142, 9), (125, 77),
+                 (9, 46), (45, 193), (18, 82), (170, 59), (61, 95),
+                 (2, 34), (118, 37), (88, 90), (111, 164), (82, 186),
+                 (18, 135), (56, 42), (121, 73), (175, 162), (178, 17),
+                 (170, 178), (138, 39), (168, 119), (118, 148), (78, 187),
+                 (91, 131), (176, 103), (32, 2), (128, 155), (206, 108),
+                 (0, 128), (78, 118), (121, 9), (173, 86), (144, 12),
+                 (102, 62), (143, 157), (29, 159), (56, 15), (174, 70),
+                 (43, 178), (66, 55), (22, 124), (23, 203), (66, 60),
+                 (23, 42), (143, 75)),
+
+                # same case simplified
+                (29, 3765, (0, 19), (10, 26), (25, 28)),
 
                 # 5918
-                (100, 5918, (17, 1), (4, 7), (3, 15), (15, 4), (18, 7),
-                 (15, 1), (11, 0), (12, 7), (7, 6), (15, 16), (4, 14),
-                 (19, 9)),
+                (14, 5918, (0, 0), (1, 6), (2, 8)),
 
-                # other hand-selected test cases and (once) randomly generated
+                # similar case
+                (14, 5918, (1, 0), (5, 1), (11, 6)),
+
+                # largest currently known (not sure if there is an
+                # asymptotic limit, or if it's actually unbounded)
+                (23, 6238, (22, 14), (17, 0), (20, 5)),
+
+                # another 6238
+                (23, 6238, (9, 20), (0, 22), (17, 14)),
+
+                # and another
+                (23, 6238, (0, 14), (2, 5), (5, 0)),
+
+                # this one is nice bcs one cell at origin
+                (23, 6238, (9, 2), (14, 5), (0, 0)),
+
+                # other test cases, some hand generated some randomly generated
                 (50, 0, (0, 0), (49, 49)),
                 (50, 0, (19, 0), (13, 15), (18, 7)),
                 (50, 0, (18, 7), (19, 0), (13, 15)),
@@ -476,7 +511,7 @@ if __name__ == "__main__":
                 (50, 0, (23, 4), (12, 32), (15, 17), (3, 15), (12, 30),
                  (21, 7), (25, 27), (2, 28), (44, 32), (7, 16)))
             for size, ppm, *sites in test_vectors:
-                g = self.makemap(size, size)
+                g = FauxGrid(size, size)
                 slack = 1.0 + (ppm / 1000000.0)
                 errstr = self.brutevv(g, Voronoi(g, sites), slack)
                 self.assertTrue(errstr is None, errstr)
@@ -490,9 +525,10 @@ if __name__ == "__main__":
         def brutevv(self, g, v, slack=1.008):
             # brute-force verify every point is indeed closest to the
             # voronoi seed for the one it was put into.
-            # HOWEVER, allow some error ("slack", 0.8%, somewhat arbitrary).
-            # After running random test cases for multiple days, the
-            # highest error amount seen was 1.006238; obviously this is
+            #
+            # HOWEVER, allow some error ("slack", default 0.8%, somewhat
+            # arbitrary). After days of running millions of randomized tests,
+            # the highest error amount seen was 1.006238; obviously this is
             # no guarantee that higher errors won't be seen.
             #
             # See Voronoi code for discussion; it is a fundamental (haha!)
@@ -508,7 +544,7 @@ if __name__ == "__main__":
                 for othersite in v.sites:
                     if othersite != xysite:
                         d1 = v._distmetric(othersite, xy)
-                        d1 *= slack
+                        d1 = int(d1*slack)
                         if d0 > d1:
                             s = ""
                             s = f"xy={xy}"
@@ -523,9 +559,9 @@ if __name__ == "__main__":
             # same idea as test_vor5 but with randomness
             # does not control "slack" (uses default, see brutevv)
             for nth in range(5):
-                size = random.randrange(30, 300)
-                nsites = max(size // random.randrange(3, 50), 1)
-                g = self.makemap(size, size)
+                size = random.randrange(20, 200)
+                nsites = max(size // random.randrange(3, 50), 4)
+                g = FauxGrid(size, size)
                 sites = random.sample(set(g.all()), nsites)
                 errstr = self.brutevv(g, Voronoi(g, sites))
                 self.assertTrue(errstr is None, errstr)
@@ -535,11 +571,10 @@ if __name__ == "__main__":
             # the corner; after lloyd site should be in center.
             # TODO: Obviously need more/better lloyd tests.
             size = 5
-            g = self.makemap(size, size)
+            g = FauxGrid(size, size)
             v = Voronoi(g, ((0, 0),))
             v2 = v.lloyd()
             xysite = v2.xy_to_site((0, 0))
             self.assertEqual(xysite, (size//2, size//2))
 
-if __name__ == "__main__":
     unittest.main()
