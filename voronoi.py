@@ -329,11 +329,6 @@ if __name__ == "__main__":
                 for y in range(self.ysize):
                     yield (x, y)
 
-        def d2distance(self, p1, p2):
-            dx = p1[0] - p2[0]
-            dy = p1[1] - p2[1]
-            return (dx * dx) + (dy * dy)
-
     class TestMethods(unittest.TestCase):
 
         def test_vor1(self):
@@ -419,7 +414,7 @@ if __name__ == "__main__":
         def test_vor5(self):
             # test cases from various sources, some known to be
             # very specific aliasing cases (so noted).
-            # Each test vector is a (sloppy) tuple:
+            # Each test vector is a tuple:
             #      (gridsize, slack-in-ppm, tuples...)
             #
             test_vectors = (
@@ -428,6 +423,9 @@ if __name__ == "__main__":
                 #
                 # Many of these came from a randomized test search and then
                 # were "reduced" to a minimal size for the specific example.
+
+                # PPM=187 (i.e., requires 1.000187 slack)
+                (147, 187, (19, 24), (0, 39), (87, 0)),
 
                 # PPM=595 (i.e., requires 1.000595 slack)
                 (42, 595, (0, 31), (13, 0), (1, 21)),
@@ -473,6 +471,9 @@ if __name__ == "__main__":
                 # similar case
                 (14, 5918, (1, 0), (5, 1), (11, 6)),
 
+                # also 5918
+                (14, 5918, (0, 6), (10, 0), (6, 1)),
+
                 # largest currently known (not sure if there is an
                 # asymptotic limit, or if it's actually unbounded)
                 (23, 6238, (22, 14), (17, 0), (20, 5)),
@@ -511,25 +512,52 @@ if __name__ == "__main__":
                 (50, 0, (23, 4), (12, 32), (15, 17), (3, 15), (12, 30),
                  (21, 7), (25, 27), (2, 28), (44, 32), (7, 16)))
             for size, ppm, *sites in test_vectors:
-                g = FauxGrid(size, size)
-                slack = 1.0 + (ppm / 1000000.0)
-                errstr = self.brutevv(g, Voronoi(g, sites), slack)
-                self.assertTrue(errstr is None, errstr)
-                # if the slack is non-zero, verify that it's correct.
-                # This is as much about testing the test as testing voronoi...
-                if ppm != 0:
-                    slackm1 = 1.0 + ((ppm - 1) / 1000000.0)
-                    errstr = self.brutevv(g, Voronoi(g, sites), slackm1)
-                    self.assertTrue(errstr is not None, f"slackm1 {ppm}")
+                with self.subTest(size=size, ppm=ppm, sites=sites):
+                    g = FauxGrid(size, size)
+                    slack = 1.0 + (ppm / 1000000.0)
+                    errstr = self.brutevv(g, Voronoi(g, sites), slack)
+                    self.assertTrue(errstr is None, errstr)
+                    # if the slack is non-zero, verify that it's correct.
+                    # This is really testing the test rather than voronoi...
+                    if ppm != 0:
+                        slackm1 = 1.0 + ((ppm - 1) / 1000000.0)
+                        errstr = self.brutevv(g, Voronoi(g, sites), slackm1)
+                        self.assertTrue(errstr is not None, f"slackm1 {ppm}")
 
-        def brutevv(self, g, v, slack=1.008):
+        def brutevv(self, g, v, slack=1.0065):
             # brute-force verify every point is indeed closest to the
             # voronoi seed for the one it was put into.
             #
-            # HOWEVER, allow some error ("slack", default 0.8%, somewhat
-            # arbitrary). After days of running millions of randomized tests,
-            # the highest error amount seen was 1.006238; obviously this is
-            # no guarantee that higher errors won't be seen.
+            # HOWEVER, some error "slack" is allowed.
+            #
+            # Over 8M random test cases were tried on grid sizes between 20x20
+            # and 200x200, with a random number of seeds (min 3, max one-third
+            # of the total grid). The maximum error found was 6238 ppm
+            # (equivalent to "slack" 1.006238).
+            #
+            # Many of those cases are represented in the test vectors, but
+            # have been "reduced" to their minimum essential seeds and size.
+            # None of the random test cases found required more than a 23x23
+            # grid or more than three voronoi seeds in reduced form.
+            #
+            # To further explore error cases, the entire combinatorial space
+            # of a 25x25 grid with three voronoi seeds was searched. The
+            # entire search took well over a week of run time. The maximum
+            # error found was also 6238 ppm. Thus, the unittests use a
+            # default "slack" value of 0.65% to cover the worst-known (so
+            # far) result. There is, of course, no guarantee ppm=6238 is any
+            # kind of hard maximum limit, and the only reason the search
+            # was conducted with three cells is that random searching has
+            # yet to discover a case that cannot be reduced to just three
+            # essential seeds to reproduce it. This is no guarantee there
+            # aren't cases requiring more voronoi cells.
+            #
+            # An exhaustive search using four voronoi cells and a 17x17
+            # grid failed to find any cases greater than PPM=5918. A
+            # sampling of those four-cell cases failed to find any that
+            # couldn't be reduced to a three-cell equivalent. Again, this
+            # is no guarantee there are no such cases possible. Even just
+            # searching a 17x17 grid with four cells took weeks of CPU time.
             #
             # See Voronoi code for discussion; it is a fundamental (haha!)
             # consequence of aliasing "high frequencies" -- i.e., "pointy"
@@ -558,13 +586,16 @@ if __name__ == "__main__":
         def test_vor6(self):
             # same idea as test_vor5 but with randomness
             # does not control "slack" (uses default, see brutevv)
-            for nth in range(5):
-                size = random.randrange(20, 200)
+            # The lower bound on grid size is set to 26 because the entire
+            # 25x25 grid space has been searched (albeit with only 3 seeds)
+            for nth in range(10):
+                size = random.randrange(26, 200)
                 nsites = max(size // random.randrange(3, 50), 4)
                 g = FauxGrid(size, size)
                 sites = random.sample(set(g.all()), nsites)
-                errstr = self.brutevv(g, Voronoi(g, sites))
-                self.assertTrue(errstr is None, errstr)
+                with self.subTest(size=size, sites=sites):
+                    errstr = self.brutevv(g, Voronoi(g, sites))
+                    self.assertTrue(errstr is None, errstr)
 
         def test_lloyd1(self):
             # very simple-minded test, start with a 5x5 with a site in
