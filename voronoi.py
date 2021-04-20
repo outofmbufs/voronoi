@@ -592,7 +592,7 @@ if __name__ == "__main__":
                 size = random.randrange(26, 200)
                 nsites = max(size // random.randrange(3, 50), 4)
                 g = FauxGrid(size, size)
-                sites = random.sample(set(tuple(g.all())), nsites)
+                sites = random.sample(tuple(set(g.all())), nsites)
                 with self.subTest(size=size, sites=sites):
                     errstr = self.brutevv(g, Voronoi(g, sites))
                     self.assertTrue(errstr is None, errstr)
