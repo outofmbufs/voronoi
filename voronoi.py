@@ -259,11 +259,9 @@ class Voronoi:
         for site in self.sites:
             xtotal = 0
             ytotal = 0
-            n = 0
-            for cellxy in self.cellxys(site):
+            for n, cellxy in enumerate(self.cellxys(site)):
                 xtotal += cellxy[0]
                 ytotal += cellxy[1]
-                n += 1
             if n == 0:
                 newsites.append(site)
             else:
@@ -278,12 +276,10 @@ class Voronoi:
         str = ""
         sites_to_char = {}
         reps = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-        nth = 0
         xy_to_char = {}
         xmin = xmax = ymin = ymax = None
-        for s in self:
+        for nth, s in enumerate(self):
             sites_to_char[s] = reps[nth % len(reps)]
-            nth += 1
             # this is hokey, but avoids assuming anything about xy ranges...
             # discover from them examining all the xys in all the cells
             for xy in self.cellxys(s):
