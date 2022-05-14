@@ -127,6 +127,9 @@ class Voronoi:
         #        13   8   5   4   5   8  13
         #        18  13  10   9  10  13  18
         #
+        # ASIDE: using the default distance metric (dx^2 + dy^2),
+        #        the possible values for N are https://oeis.org/A001481
+        #
         # Starting with each site (the "0" in the example shown), the site
         # itself is assigned (obviously) to the Voronoi seeded by that site.
         #
@@ -204,9 +207,19 @@ class Voronoi:
         for s in sites:
             _perims_add_nb(s, s)
 
+        biggest_N_yet = 0
+
         while perims_by_N:
             # take the smallest known distance metric
             N = min(perims_by_N.keys())
+
+            # XXX: Can it be *proven* that N never goes backwards here?
+            #      Is that dependent on the distance metric details? Ugh.
+            #      Algorithm relies on this, so check it.
+            if N <= biggest_N_yet:
+                raise ValueError(f"{N=}, {biggest_N_yet=}")
+            biggest_N_yet = N
+
             for xy, s in perims_by_N[N].items():
                 if xy not in xy2s:     # i.e., only do if not already claimed
 
