@@ -61,7 +61,25 @@
 #
 #       ** Override _distmetric for other metrics.
 #
-
+# IMPORTANT NOTE
+# Taken together, the distance metric and the neighbors generator
+# must obey this constraint:
+#   * Let P be a list of points [p0=A, p1, p2, ... pN-1, pN=B]
+#     comprising a "path" from point A (p0) to point B (pN), where
+#     each point in the path is in the neighbors list of the previous point.
+#
+#   * Let L = len(P) and call this the "length" of the path.
+#
+#   * A path, "S", with the smallest "L" must meet this criteria:
+#      Each point P in S must have a distance metric >= (i.e., not less)
+#      than the distance metric than the previous point in S.
+#
+#      NOTE: If there are multiple paths S with the same smallest L,
+#            then AT LEAST ONE such path must meet that criteria.
+#
+# In English this means there are no wierd "craters" where somehow
+# the points inside those craters are completely enclosed by a ridge
+# of points further away from a given seed.
 
 class Voronoi:
     """Voronoi diagrams. See https://en.wikipedia.org/wiki/Voronoi_diagram"""
@@ -70,7 +88,7 @@ class Voronoi:
     # Avoiding sqrt is an optimization because only relative size matters.
     #
     # Override this method if a different distance metric is required.
-    #
+    # SEE NOTE ABOUT REQUIRED PROPERTIES IN MODULE COMMENTS ABOVE
     def _distmetric(self, xy1, xy2):
         """Return distance metric between xy1, xy2."""
         dx = xy1[0] - xy2[0]
@@ -110,7 +128,8 @@ class Voronoi:
             raise ValueError("Voronoi cannot be created with no sites")
 
         # algorithm assumes no duplicated sites; enforce this w/useful msg
-        if len(set(sites)) != len(sites):
+        self.sites = frozenset(sites)      # also: because want to copy it
+        if len(self.sites) != len(sites):
             raise ValueError("Voronoi sites cannot contain duplicates")
 
         # This is a (grid-quantized) "growing circles" Voronoi algorithm.
@@ -162,7 +181,8 @@ class Voronoi:
         # The obvious exception is a square like A* which is in the active
         # perimeter list of two sites in this example. It is equidistant from
         # both and fundamentally ambiguous. Ambiguous squares are assigned
-        # to Voronoi cells based on the order of their sites as given.
+        # to Voronoi cells based on their order of discovery, which for
+        # the default distance metric will be the order of the given sites.
         #
         # This ambiguity is one manifestation of quantization error and should
         # be thought of as a fundamental aliasing artifact imposed by sampling
@@ -207,30 +227,22 @@ class Voronoi:
         for s in sites:
             _perims_add_nb(s, s)
 
-        biggest_N_yet = 0
-
         while perims_by_N:
             # take the smallest known distance metric
             N = min(perims_by_N.keys())
 
-            # XXX: Can it be *proven* that N never goes backwards here?
-            #      Is that dependent on the distance metric details? Ugh.
-            #      Algorithm relies on this, so check it.
-            if N <= biggest_N_yet:
-                raise ValueError(f"{N=}, {biggest_N_yet=}")
-            biggest_N_yet = N
-
+            # note: loop carefully designed to allow for more
+            #       perims_by_N[N] to appear within the loop
+            #       (only happens with bizarre distmetrics, but allow it)
+            add_these = []
             for xy, s in perims_by_N[N].items():
                 if xy not in xy2s:     # i.e., only do if not already claimed
-
                     xy2s[xy] = s       # assign this one to its site
+                    add_these.append((xy, s))
 
-                    # NOTE: by definition the neighbors cannot be at this
-                    # same N; therefore, although this modifies perims_by_N
-                    # it does not modify perims_by_N[N] used in this loop
-                    _perims_add_nb(xy, s)
-
-            del perims_by_N[N]
+            del perims_by_N[N]         # finished all these ...
+            for xy, s in add_these:    # and add these new ones (if any)
+                _perims_add_nb(xy, s)
 
         # xy2s now maps every xy to a site; construct reverse map too
         # (from a site to a set of squares that are the cell for that site)
@@ -241,10 +253,6 @@ class Voronoi:
         self.__grid = g
         self.__xy2s = xy2s
         self.__site2xys = site2xys
-
-    @property
-    def sites(self):
-        return self.__site2xys.keys()
 
     # allow "for site in v"
     def __iter__(self):
@@ -616,5 +624,38 @@ if __name__ == "__main__":
             v2 = v.lloyd()
             xysite = v2.xy_to_site((0, 0))
             self.assertEqual(xysite, (size//2, size//2))
+
+        def test_plateau(self):
+            # Wacky distance metric that implements a maximum value.
+            # In effect this creats a plateau in the distance topology.
+            class BVoronoi(Voronoi):
+                def _distmetric(self, xy1, xy2):
+
+                    # for test purposes, if either point is a site
+                    # and the site has either coordinate zero, then
+                    # the maximum distance will be 5.  This is just to
+                    # test what happens with a demented distmetric
+                    d = super()._distmetric(xy1, xy2)
+                    x1, y1 = xy1
+                    x2, y2 = xy2
+                    if ((xy1 in self.sites and (x1 == 0 or y1 == 0)) or
+                        (xy2 in self.sites and (x2 == 0 or y2 == 0))):
+                        if d > 5:
+                            d = 5
+                    return d
+            g = FauxGrid(7, 7)
+            v = BVoronoi(g, ((0, 0), (6, 6)))
+
+            # hand-computed result... these are the points that should
+            # be in the 6,6 voronoi; all other points should be in the 0,0
+            expected66 = ((6, 6), (5, 6), (4, 6),
+                          (6, 5), (5, 5), (4, 5),
+                          (6, 4), (5, 4))
+            for xy in v.cellxys((6, 6)):
+                self.assertTrue(xy in expected66)
+
+            for xy in v.cellxys((0, 0)):
+                self.assertFalse(xy in expected66)
+
 
     unittest.main()
