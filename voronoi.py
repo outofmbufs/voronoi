@@ -639,7 +639,7 @@ if __name__ == "__main__":
                     x1, y1 = xy1
                     x2, y2 = xy2
                     if ((xy1 in self.sites and (x1 == 0 or y1 == 0)) or
-                        (xy2 in self.sites and (x2 == 0 or y2 == 0))):
+                            (xy2 in self.sites and (x2 == 0 or y2 == 0))):
                         if d > 5:
                             d = 5
                     return d
@@ -656,6 +656,5 @@ if __name__ == "__main__":
 
             for xy in v.cellxys((0, 0)):
                 self.assertFalse(xy in expected66)
-
 
     unittest.main()
